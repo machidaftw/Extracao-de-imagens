@@ -1,46 +1,53 @@
+"""Coletor de imagens com Selenium + BeautifulSoup.
+
+Abre capítulos de webcomic/mangá, rola para carregar imagens, coleta os links e
+baixa para disco. Usa um único driver do Chrome para evitar reinicializações a
+cada capítulo.
+"""
+
 import os
+import time
+
 import requests
 from bs4 import BeautifulSoup
 from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
-from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.common.by import By
-import time
+from webdriver_manager.chrome import ChromeDriverManager
 
-# O log_path=os.devnull serve para silenciar mensagens de erro chatas no terminal
 service = Service(ChromeDriverManager().install(), log_path=os.devnull)
-driver = webdriver.Chrome(service=service)
+options = Options()
+options.add_argument("--headless")
+options.add_argument("--disable-gpu")
+
+driver = webdriver.Chrome(service=service, options=options)
 
 def baixa_imagens(url, pasta_destino):
+    """Faz scroll completo na página, coleta e salva imagens.
+
+    Args:
+        url: Endereço da página do capítulo.
+        pasta_destino: Pasta onde as imagens serão gravadas; cria se não existir.
+    """
     if not os.path.exists(pasta_destino):
         os.makedirs(pasta_destino)
     
     driver.get(url)
     print("Aguardando carregamento inicial...")
-    time.sleep(3) # Tempo para a página carregar a estrutura
-
-    # --- IMPLEMENTAÇÃO DA ROLAGEM (SCROLL) ---
+    time.sleep(3)
     print("Iniciando rolagem para carregar imagens (Lazy Loading)...")
-    
-    # Pegamos a altura total da página
     ultima_altura = driver.execute_script("return document.body.scrollHeight")
     
     while True:
-        # Rola até o fim da página atual
         driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-        
-        # Espera as imagens carregarem (essencial para sites pesados)
-        time.sleep(2) 
-        
-        # Calcula a nova altura e compara com a última
+        time.sleep(2)
         nova_altura = driver.execute_script("return document.body.scrollHeight")
         if nova_altura == ultima_altura:
-            break # Se a altura não mudou, chegamos ao fim
+            break
         ultima_altura = nova_altura
     
     print("Rolagem concluída. Analisando HTML...")
-
-    # Agora sim, pegamos o HTML com tudo carregado
     soup = BeautifulSoup(driver.page_source, 'lxml')
     campo_leitura = soup.find('div', class_='py-8')
     imagens = campo_leitura.find_all('img')
@@ -48,14 +55,12 @@ def baixa_imagens(url, pasta_destino):
     print(f"Encontradas {len(imagens)} imagens. Iniciando download...")
 
     for i, img in enumerate(imagens):
-        # Trick para Lazy Loading: tenta 'data-src' primeiro, se não tiver, usa 'src'
         link = img.get('data-src') or img.get('src')
         
         if not link or not link.startswith('http'):
             continue
 
         try:
-            # Identificando-se como navegador para evitar bloqueio 403 (Forbidden)
             headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/131.0.0.0'}
             resposta = requests.get(link, headers=headers, timeout=15)
             
@@ -68,20 +73,19 @@ def baixa_imagens(url, pasta_destino):
             print(f"Erro ao baixar {link}: {e}")
 
 def processo_completo(url_inicial, pasta_base, total_capitulos=3):
+    """Percorre capítulos sequenciais, salvando imagens em subpastas.
+
+    Args:
+        url_inicial: Primeiro capítulo a processar.
+        pasta_base: Pasta raiz onde cada capítulo será criado.
+        total_capitulos: Quantidade máxima de capítulos a baixar.
+    """
     url_atual = url_inicial
     
     for i in range(total_capitulos):
         nome_pasta = os.path.join(pasta_base, f"capitulo_{i+1}")
-        
-        # 1. Chama a sua função de baixar imagens (que já criamos)
-        # Importante: Remova o driver.quit() de dentro da função baixar_imagens 
-        # para o navegador não fechar entre um capítulo e outro.
         baixa_imagens(url_atual, nome_pasta)
-        
-        # 2. Localiza o link do próximo capítulo
         try:
-            # Buscamos um link que contenha a palavra "Next" ou ícones de seta
-            # O seletor abaixo é um exemplo comum em 2026 para esses sites
             botao_proximo = driver.find_element(By.XPATH, "//h2[contains(@class, 'next') or contains(text(), 'Next')]")
             url_atual = botao_proximo.find_element(By.XPATH, "./ancestor::a[1]").get_attribute("href")
             print(f"Indo para o próximo capítulo: {url_atual}")
